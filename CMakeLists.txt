@@ -23,6 +23,7 @@ include(GtsamTesting)    # Easy functions for creating unit tests and scripts
 include_directories(BEFORE "${PROJECT_SOURCE_DIR}")
 
 find_package(nlohmann_json  REQUIRED)
+find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 
 ###################################################################################
 # Find GTSAM components

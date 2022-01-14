@@ -2,22 +2,20 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <list>
+// #include <Eigen/Dense>
 #include "lib/sensor.hpp"
 
 using namespace std;
-using namespace gtsam;
+// using namespace gtsam;
 
 int main() {
-    while (true) {
-        list<json> json_obj = getJson(10);
-        if (json_obj == nlohmann::json::parse("{}")) {
-            continue;
-        } else {
-            for (int i=0; i<10; i++) {
-                cout << json_obj.front() << endl;
-                json_obj.pop_front();
-            }
-        }
-    }
+    // Pre-measured anchor positions
+    Eigen::Matrix<double,3,5> anchors;
+    anchors <<  0.13,  0.65,  0.47,
+                1.49, -1.06, -0.0 ,
+                1.49, -0.38,  0.8 ,
+               -0.17,  0.65,  0.82,
+                0.31, -0.1 ,  0   ;
+
     return 0;
 }
