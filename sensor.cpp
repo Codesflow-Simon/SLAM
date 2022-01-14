@@ -1,50 +1,95 @@
+#include <termios.h> // Contains POSIX terminal control definitions
 #include <iostream>
-#include <array>
+#include <fcntl.h>    /* For O_RDWR */
+#include <unistd.h>   /* For open(), creat() */
 #include <list>
-#include <vector>
-#include <fstream>
 #include <nlohmann/json.hpp>
-#include <serial/serial.h>
 
 using json = nlohmann::json;
 using namespace std;
 
+struct termios tty;
+
+
+json parseJsonSafe(char* dump) {
+  try {
+    return json::parse(dump);
+  } catch(const nlohmann::detail::parse_error) {}
+  return json::parse("{}");
+}
+
 list<json> getJson() {
   list<json> output;
 
-  int bufferSize = 1024;
-  int bufferIndex = 0;
-  char buffer[bufferSize];
+  int USB = open("/dev/ttyS4", O_RDWR| O_NOCTTY);
 
-  int device = open(port.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
-  cout << sensor.isOpen();
+  struct termios tty;
+  struct termios tty_old;
+  memset (&tty, 0, sizeof tty);
 
-  while (output.size()<10) {
-    char data = sensor.read(1)[0];
-    buffer[bufferIndex] = data;
-    bufferIndex++;
-
-    if (data == '\n') {
-
-      string jsonDump = "";
-      for (int i=0; i<bufferIndex; i++) {
-        jsonDump += buffer[i];
-      }
-
-      try {
-        json json_obj = json::parse(jsonDump);
-        cout << json_obj << '\n';
-        output.push_back(json_obj);      
-      } catch (const nlohmann::detail::parse_error) {
-        
-      }
-    }
+  /* Error Handling */
+  if ( tcgetattr ( USB, &tty ) != 0 ) {
+    std::cout << "Error " << errno << " from tcgetattr: " << strerror(errno) << std::endl;
   }
 
-  sensor.close();
+  /* Set Baud Rate */
+  cfsetospeed (&tty, (speed_t)B1000000);
+  cfsetispeed (&tty, (speed_t)B1000000);
+
+  /* Setting other Port Stuff */
+  tty.c_cflag     &=  ~PARENB;            // Make 8n1
+  tty.c_cflag     &=  ~CSTOPB;
+  tty.c_cflag     &=  ~CSIZE;
+  tty.c_cflag     |=  CS8;
+
+  tty.c_cflag     &=  ~CRTSCTS;           // no flow control
+  tty.c_cc[VMIN]   =  1;                  // read doesn't block
+  tty.c_cc[VTIME]  =  5;                  // 0.5 seconds read timeout
+  tty.c_cflag     |=  CREAD | CLOCAL;     // turn on READ & ignore ctrl lines
+
+  /* Make raw */
+  cfmakeraw(&tty);
+
+  /* Flush Port, then applies attributes */
+  tcflush( USB, TCIFLUSH );
+  if ( tcsetattr ( USB, TCSANOW, &tty ) != 0) {
+    std::cout << "Error " << errno << " from tcsetattr" << std::endl;
+  }
+
+  int n = 0,
+    spot = 0;
+  char buf = '\0';
+
+  /* Whole response*/
+  char response[1024];
+  memset(response, '\0', sizeof(response));
+
+  do {
+      n = read( USB, &buf, 1);
+      sprintf( &response[spot], "%c", buf );
+      spot += n;
+      if (buf == '\n') {
+        output.push_back(parseJsonSafe(response));
+        fill_n(response, spot, (char)0);
+        spot=0;
+      }
+  } while( output.size()<5 && n > 0);
+
+  if (n < 0) {
+      std::cout << "Error reading: " << strerror(errno) << std::endl;
+  }
+  else if (n == 0) {
+      std::cout << "Read nothing!" << std::endl;
+  }
+  else {
+      std::cout << "Response: " << response << std::endl;
+  }
+
+  close(USB);
   return output;
 }
 
 int main() {
   cout << getJson();
+  return 0;
 }
