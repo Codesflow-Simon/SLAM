@@ -32,7 +32,7 @@ include_directories(${GTSAM_INCLUDE_DIR})
 ###################################################################################
 # Build static library from common sources
 set(CONVENIENCE_LIB_NAME ${PROJECT_NAME})
-add_library(${CONVENIENCE_LIB_NAME} STATIC sensor.hpp sensor.cpp)
+add_library(${CONVENIENCE_LIB_NAME} STATIC lib/sensor.hpp lib/sensor.cpp)
 target_link_libraries(${CONVENIENCE_LIB_NAME} gtsam)
 
 ###################################################################################

@@ -15,7 +15,7 @@ json parseJsonSafe(char* dump) {
   return json::parse("{}");
 }
 
-list<json> getJson() {
+list<json> getJson(unsigned int num=1) {
   list<json> output;
 
   int USB = open("/dev/ttyS4", O_RDWR| O_NOCTTY);
@@ -69,23 +69,13 @@ list<json> getJson() {
         fill_n(response, spot, (char)0);
         spot=0;
       }
-  } while( output.size()<5 && n > 0);
-
-  if (n < 0) {
-      std::cout << "Error reading: " << strerror(errno) << std::endl;
-  }
-  else if (n == 0) {
-      std::cout << "Read nothing!" << std::endl;
-  }
-  else {
-      std::cout << "Response: " << response << std::endl;
-  }
+  } while( output.size()<num && n > 0);
 
   close(USB);
   return output;
 }
 
-int main() {
-  cout << getJson();
-  return 0;
-}
+// int main() {
+//   cout << getJson();
+//   return 0;
+// }
