@@ -8,13 +8,10 @@
 using json = nlohmann::json;
 using namespace std;
 
-struct termios tty;
-
-
 json parseJsonSafe(char* dump) {
   try {
     return json::parse(dump);
-  } catch(const nlohmann::detail::parse_error) {}
+  } catch(nlohmann::detail::parse_error const&) {}
   return json::parse("{}");
 }
 
@@ -24,7 +21,6 @@ list<json> getJson() {
   int USB = open("/dev/ttyS4", O_RDWR| O_NOCTTY);
 
   struct termios tty;
-  struct termios tty_old;
   memset (&tty, 0, sizeof tty);
 
   /* Error Handling */
