@@ -11,7 +11,9 @@ using namespace std;
 json parseJsonSafe(char* dump) {
   try {
     return json::parse(dump);
-  } catch(nlohmann::detail::parse_error const&) {}
+  } catch(nlohmann::detail::parse_error const&) {
+    // cout << "Json parse error: " << dump;
+  }
   return json::parse("{}");
 }
 

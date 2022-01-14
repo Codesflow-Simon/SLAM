@@ -1,11 +1,10 @@
-#include <gtsam/slam/BetweenFactor.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <list>
 #include "lib/sensor.hpp"
 
+
 using namespace std;
-using namespace gtsam;
 
 int main() {
     while (true) {
