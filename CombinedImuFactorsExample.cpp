@@ -152,7 +152,7 @@ int main(int argc, char* argv[]) {
   Point3 prior_point(initial_state.head<3>());
   Pose3 prior_pose(prior_rotation, prior_point);
   Vector3 prior_velocity(initial_state.tail<3>());
-
+ 
   imuBias::ConstantBias prior_imu_bias;  // assume zero initial bias
 
   int index = 0;
