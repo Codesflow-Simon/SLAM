@@ -7,6 +7,7 @@
 using namespace std;
 
 int main() {
+    // Prints out mass sensor infomation
     while (true) {
         list<json> json_obj = getJson(10);
         if (json_obj == nlohmann::json::parse("{}")) {

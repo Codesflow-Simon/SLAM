@@ -8,20 +8,12 @@
 using json = nlohmann::json;
 using namespace std;
 
-json parseJsonSafe(char* dump) {
-  try {
-    return json::parse(dump);
-  } catch(nlohmann::detail::parse_error const&) {
-    // cout << "Json parse error: " << dump;
-  }
-  return json::parse("{}");
-}
-
 list<json> getJson(unsigned int num=1) {
   list<json> output;
 
   int USB = open("/dev/ttyS4", O_RDWR| O_NOCTTY);
 
+  // Settings for serial port
   struct termios tty;
   memset (&tty, 0, sizeof tty);
 
@@ -54,6 +46,7 @@ list<json> getJson(unsigned int num=1) {
     std::cout << "Error " << errno << " from tcsetattr" << std::endl;
   }
 
+  // number of bytes read, index, char buffer respectively
   int n = 0,
     spot = 0;
   char buf = '\0';
@@ -62,6 +55,7 @@ list<json> getJson(unsigned int num=1) {
   char response[1024];
   memset(response, '\0', sizeof(response));
 
+  // Read "num" many full jsons 
   do {
       n = read( USB, &buf, 1);
       response[spot] = buf;
@@ -72,7 +66,7 @@ list<json> getJson(unsigned int num=1) {
           fill_n(response, spot, '\0');
           spot=0;
         } catch(nlohmann::detail::parse_error const&) {
-          fill_n(response, 1024, '\0');
+          fill_n(response, 1024, '\0');  // If error is json communication, clear response
           spot = 0;
           continue;
         }
