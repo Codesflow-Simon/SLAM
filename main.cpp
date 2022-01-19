@@ -20,6 +20,7 @@
 using namespace std;
 using namespace gtsam;
 
+// Shorthands, there are indexed by "index" and contain keys to relevant infomation
 using symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
 using symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
@@ -36,8 +37,6 @@ int main() {
               -0.17,  0.65,  0.82,
               0.31, -0.1 ,  0   ;
 
-  PreintegrationType *imu_preintegrated_;
-
   // Assume intital state is at origin
   Rot3 prior_rotation = Rot3();
   Point3 prior_point = Point3();
@@ -45,35 +44,40 @@ int main() {
   Vector3 prior_velocity = Vector3();
   imuBias::ConstantBias prior_imu_bias; // assume zero initial bias
 
+  // Insert initial values, there are assumed to be just the origin
   Values initial_values;
-  int correction_count = 0;
-  initial_values.insert(X(correction_count), prior_pose);
-  initial_values.insert(V(correction_count), prior_velocity);
-  initial_values.insert(B(correction_count), prior_imu_bias);  
+  int index = 0;
+  initial_values.insert(X(index), prior_pose);
+  initial_values.insert(V(index), prior_velocity);
+  initial_values.insert(B(index), prior_imu_bias);  
 
-  // Assemble prior noise model and add it the graph.
+  // Assemble prior noise model and add it the graph, uncertainty in initial assumptions, need correcting
   noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
   noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,0.1); // m/s
   noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,1e-3);
 
   // Add all prior factors (pose, velocity, bias) to the graph.
+  // Uses X,V,B shorthands to get the keys at the index
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
-  graph->add(PriorFactor<Pose3>(X(correction_count), prior_pose, pose_noise_model));
-  graph->add(PriorFactor<Vector3>(V(correction_count), prior_velocity,velocity_noise_model));
-  graph->add(PriorFactor<imuBias::ConstantBias>(B(correction_count), prior_imu_bias,bias_noise_model));
+  graph->add(PriorFactor<Pose3>(X(index), prior_pose, pose_noise_model));
+  graph->add(PriorFactor<Vector3>(V(index), prior_velocity,velocity_noise_model));
+  graph->add(PriorFactor<imuBias::ConstantBias>(B(index), prior_imu_bias,bias_noise_model));
 
-  // We use the sensor specs to build the noise model for the IMU factor.
+  // Need to tune these for the sensor
   double accel_noise_sigma = 0.0003924;
   double gyro_noise_sigma = 0.000205689024915;
   double accel_bias_rw_sigma = 0.004905;
   double gyro_bias_rw_sigma = 0.000001454441043;
+  // Generate covariance matricies, identity provides uniform initially assumes no correleation?
   Matrix33 measured_acc_cov = Matrix33::Identity(3,3) * pow(accel_noise_sigma,2);
   Matrix33 measured_omega_cov = Matrix33::Identity(3,3) * pow(gyro_noise_sigma,2);
-  Matrix33 integration_error_cov = Matrix33::Identity(3,3)*1e-8; // error committed in integrating position from velocities
+  Matrix33 integration_error_cov = Matrix33::Identity(3,3)*1e-8;   // error committed in integrating position from velocities
   Matrix33 bias_acc_cov = Matrix33::Identity(3,3) * pow(accel_bias_rw_sigma,2);
   Matrix33 bias_omega_cov = Matrix33::Identity(3,3) * pow(gyro_bias_rw_sigma,2);
-  Matrix66 bias_acc_omega_int = Matrix::Identity(6,6)*1e-5; // error in the bias used for preintegration
+  Matrix66 bias_acc_omega_int = Matrix::Identity(6,6)*1e-5;        // error in the bias used for preintegration
 
+
+  /// Set some the covariances in the model
   auto p = PreintegratedCombinedMeasurements::Params::MakeSharedD(0.0);
   // PreintegrationBase params:
   p->accelerometerCovariance = measured_acc_cov; // acc white noise in continuous
@@ -86,28 +90,32 @@ int main() {
   p->biasOmegaCovariance = bias_omega_cov; // gyro bias in continuous
   p->biasAccOmegaInt = bias_acc_omega_int;
 
-  imu_preintegrated_ = new PreintegratedImuMeasurements(p, prior_imu_bias);
+  // A setting? not used anywhere in later code
+  std::shared_ptr<PreintegrationType> preintegrated =
+    std::make_shared<PreintegratedCombinedMeasurements>(p, prior_imu_bias);
 
-    // Store previous state for the imu integration and the latest predicted outcome.
+  // Store previous state for the imu integration and the latest predicted outcome.
   NavState prev_state(prior_pose, prior_velocity);
-  NavState prop_state = prev_state;
+  NavState prop_state = prev_state; // Used to store propagated states
   imuBias::ConstantBias prev_bias = prior_imu_bias;
 
   // Keep track of the total error over the entire run for a simple performance metric.
   double current_position_error = 0.0, current_orientation_error = 0.0;
 
-  // Error catch for type errors here
+  // Define initial time
   double initial_time = data.front()["ts"];
   double current_time = initial_time;
   data.pop_front();
 
   int size = data.size();
 
+  // Loop through all measurements
   for (int i=0; i<size; i++) {
     json json_obj = data.front();
     data.pop_front();
     
     double dt = (double)json_obj["ts"] - current_time;
+    current_time += dt;
 
     // IMU measurements
     Eigen::Matrix<double,3,1> acc = Eigen::Matrix<double,3,1>::Zero();
@@ -123,7 +131,7 @@ int main() {
       omega(gyroElementIndex++) = it;
     }
 
-    imu_preintegrated_->integrateMeasurement(acc, omega, dt);
+    preintegrated->integrateMeasurement(acc, omega, dt);
 
     // TODO: parameterise sensor number (currently fixed 5)
     // Read reange data
@@ -134,31 +142,31 @@ int main() {
       range(rangeElementIndex++) = it;
     }
 
-    PreintegratedImuMeasurements *preint_imu = dynamic_cast<PreintegratedImuMeasurements*>(imu_preintegrated_);
-    ImuFactor imu_factor(X(correction_count-1), V(correction_count-1),
-                          X(correction_count  ), V(correction_count ),
-                          B(correction_count-1),
-                          *preint_imu);
+    // Creates a pointer to imu preintegrated variable
+    auto preint_imu_combined = dynamic_cast<const PreintegratedCombinedMeasurements&>(*preintegrated);
+    CombinedImuFactor imu_factor(X(index - 1), V(index - 1), X(index),
+                                  V(index), B(index - 1), B(index),
+                                  preint_imu_combined);
     graph->add(imu_factor);
 
     imuBias::ConstantBias zero_bias(Vector3(0, 0, 0), Vector3(0, 0, 0));
-    graph->add(BetweenFactor<imuBias::ConstantBias>(B(correction_count-1), 
-                                                    B(correction_count  ), 
+    graph->add(BetweenFactor<imuBias::ConstantBias>(B(index-1), 
+                                                    B(index), 
                                                     zero_bias, bias_noise_model));
 
     // Add range factors here
 
-    prop_state = imu_preintegrated_->predict(prev_state, prev_bias);
+    prop_state = preintegrated->predict(prev_state, prev_bias);
 
-    initial_values.insert(X(correction_count), prop_state.pose());
-    initial_values.insert(V(correction_count), prop_state.v());
-    initial_values.insert(B(correction_count), prev_bias);
+    initial_values.insert(X(index), prop_state.pose());
+    initial_values.insert(V(index), prop_state.v());
+    initial_values.insert(B(index), prev_bias);
 
     LevenbergMarquardtOptimizer optimizer(*graph, initial_values);
 
     Vector3 gtsam_position = prev_state.pose().translation();
-    Vector3 position_error = gtsam_position - gps.head<3>();
-    current_position_error = position_error.norm();
+    // Vector3 position_error = gtsam_position - gps.head<3>();
+    // current_position_error = position_error.norm();
 
     // Calculate quaternion error, see example
   }
