@@ -1,7 +1,7 @@
 #include <termios.h> // Contains POSIX terminal control definitions
 #include <iostream>
-#include <fcntl.h>    /* For O_RDWR */
-#include <unistd.h>   /* For open(), creat() */
+#include <fcntl.h>    // For O_RDWR
+#include <unistd.h>   // For open(), creat()
 #include <list>
 #include <nlohmann/json.hpp>
 
@@ -25,16 +25,16 @@ list<json> getJson(unsigned int num=1) {
   struct termios tty;
   memset (&tty, 0, sizeof tty);
 
-  /* Error Handling */
+  // Error Handling
   if ( tcgetattr ( USB, &tty ) != 0 ) {
     std::cout << "Error " << errno << " from tcgetattr: " << strerror(errno) << std::endl;
   }
 
-  /* Set Baud Rate */
+  // Set Baud Rate 
   cfsetospeed (&tty, (speed_t)B1000000);
   cfsetispeed (&tty, (speed_t)B1000000);
 
-  /* Setting other Port Stuff */
+  // Setting other Port Stuff
   tty.c_cflag     &=  ~PARENB;            // Make 8n1
   tty.c_cflag     &=  ~CSTOPB;
   tty.c_cflag     &=  ~CSIZE;
@@ -45,10 +45,10 @@ list<json> getJson(unsigned int num=1) {
   tty.c_cc[VTIME]  =  5;                  // 0.5 seconds read timeout
   tty.c_cflag     |=  CREAD | CLOCAL;     // turn on READ & ignore ctrl lines
 
-  /* Make raw */
+  // Make raw
   cfmakeraw(&tty);
 
-  /* Flush Port, then applies attributes */
+  // Flush Port, then applies attributes
   tcflush( USB, TCIFLUSH );
   if ( tcsetattr ( USB, TCSANOW, &tty ) != 0) {
     std::cout << "Error " << errno << " from tcsetattr" << std::endl;
@@ -58,18 +58,24 @@ list<json> getJson(unsigned int num=1) {
     spot = 0;
   char buf = '\0';
 
-  /* Whole response*/
+  // Whole response
   char response[1024];
   memset(response, '\0', sizeof(response));
 
   do {
       n = read( USB, &buf, 1);
-      sprintf( &response[spot], "%c", buf );
+      response[spot] = buf;
       spot += n;
       if (buf == '\n') {
-        output.push_back(parseJsonSafe(response));
-        fill_n(response, spot, (char)0);
-        spot=0;
+        try {
+          output.push_back(json::parse(response));
+          fill_n(response, spot, '\0');
+          spot=0;
+        } catch(nlohmann::detail::parse_error const&) {
+          fill_n(response, 1024, '\0');
+          spot = 0;
+          continue;
+        }
       }
   } while( output.size()<num && n > 0);
 
