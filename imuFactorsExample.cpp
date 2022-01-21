@@ -96,10 +96,10 @@ int main(int argc, char* argv[])
   imuBias::ConstantBias prior_imu_bias; // assume zero initial bias
 
   Values initial_values;
-  int correction_count = 0;
-  initial_values.insert(X(correction_count), prior_pose);
-  initial_values.insert(V(correction_count), prior_velocity);
-  initial_values.insert(B(correction_count), prior_imu_bias);  
+  int index = 0;
+  initial_values.insert(X(index), prior_pose);
+  initial_values.insert(V(index), prior_velocity);
+  initial_values.insert(B(index), prior_imu_bias);  
 
   // Assemble prior noise model and add it the graph.
   noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
@@ -108,9 +108,9 @@ int main(int argc, char* argv[])
 
   // Add all prior factors (pose, velocity, bias) to the graph.
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
-  graph->add(PriorFactor<Pose3>(X(correction_count), prior_pose, pose_noise_model));
-  graph->add(PriorFactor<Vector3>(V(correction_count), prior_velocity,velocity_noise_model));
-  graph->add(PriorFactor<imuBias::ConstantBias>(B(correction_count), prior_imu_bias,bias_noise_model));
+  graph->add(PriorFactor<Pose3>(X(index), prior_pose, pose_noise_model));
+  graph->add(PriorFactor<Vector3>(V(index), prior_velocity,velocity_noise_model));
+  graph->add(PriorFactor<imuBias::ConstantBias>(B(index), prior_imu_bias,bias_noise_model));
 
   // We use the sensor specs to build the noise model for the IMU factor.
   double accel_noise_sigma = 0.0003924;
@@ -182,31 +182,31 @@ int main(int argc, char* argv[])
       getline(file, value, '\n');
       gps(6) = atof(value.c_str());
 
-      correction_count++;
+      index++;
 
       // Adding IMU factor and GPS factor and optimizing.
 #ifdef USE_COMBINED
       PreintegratedCombinedMeasurements *preint_imu_combined = dynamic_cast<PreintegratedCombinedMeasurements*>(imu_preintegrated_);
-      CombinedImuFactor imu_factor(X(correction_count-1), V(correction_count-1),
-                                   X(correction_count  ), V(correction_count  ),
-                                   B(correction_count-1), B(correction_count  ),
+      CombinedImuFactor imu_factor(X(index-1), V(index-1),
+                                   X(index  ), V(index  ),
+                                   B(index-1), B(index  ),
                                    *preint_imu_combined);
       graph->add(imu_factor);
 #else
       PreintegratedImuMeasurements *preint_imu = dynamic_cast<PreintegratedImuMeasurements*>(imu_preintegrated_);
-      ImuFactor imu_factor(X(correction_count-1), V(correction_count-1),
-                           X(correction_count  ), V(correction_count  ),
-                           B(correction_count-1),
+      ImuFactor imu_factor(X(index-1), V(index-1),
+                           X(index  ), V(index  ),
+                           B(index-1),
                            *preint_imu);
       graph->add(imu_factor);
       imuBias::ConstantBias zero_bias(Vector3(0, 0, 0), Vector3(0, 0, 0));
-      graph->add(BetweenFactor<imuBias::ConstantBias>(B(correction_count-1), 
-                                                      B(correction_count  ), 
+      graph->add(BetweenFactor<imuBias::ConstantBias>(B(index-1), 
+                                                      B(index  ), 
                                                       zero_bias, bias_noise_model));
 #endif
 
       noiseModel::Diagonal::shared_ptr correction_noise = noiseModel::Isotropic::Sigma(3,1.0);
-      GPSFactor gps_factor(X(correction_count),
+      GPSFactor gps_factor(X(index),
                            Point3(gps(0),  // N,
                                   gps(1),  // E,
                                   gps(2)), // D,
@@ -215,17 +215,17 @@ int main(int argc, char* argv[])
       
       // Now optimize and compare results.
       prop_state = imu_preintegrated_->predict(prev_state, prev_bias);
-      initial_values.insert(X(correction_count), prop_state.pose());
-      initial_values.insert(V(correction_count), prop_state.v());
-      initial_values.insert(B(correction_count), prev_bias);
+      initial_values.insert(X(index), prop_state.pose());
+      initial_values.insert(V(index), prop_state.v());
+      initial_values.insert(B(index), prev_bias);
 
       LevenbergMarquardtOptimizer optimizer(*graph, initial_values);
       Values result = optimizer.optimize();
 
       // Overwrite the beginning of the preintegration for the next step.
-      prev_state = NavState(result.at<Pose3>(X(correction_count)),
-                            result.at<Vector3>(V(correction_count)));
-      prev_bias = result.at<imuBias::ConstantBias>(B(correction_count));
+      prev_state = NavState(result.at<Pose3>(X(index)),
+                            result.at<Vector3>(V(index)));
+      prev_bias = result.at<imuBias::ConstantBias>(B(index));
 
       // Reset the preintegration object.
       imu_preintegrated_->resetIntegrationAndSetBias(prev_bias);

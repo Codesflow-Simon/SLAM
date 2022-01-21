@@ -9,13 +9,13 @@ using namespace std;
 int main() {
     // Prints out mass sensor infomation
     while (true) {
-        list<json> json_obj = getJson(10);
-        if (json_obj == nlohmann::json::parse("{}")) {
+        list<json> jsonObj = getJson(10);
+        if (jsonObj == nlohmann::json::parse("{}")) {
             continue;
         } else {
             for (int i=0; i<10; i++) {
-                cout << json_obj.front() << endl;
-                json_obj.pop_front();
+                cout << jsonObj.front() << endl;
+                jsonObj.pop_front();
             }
         }
     }
