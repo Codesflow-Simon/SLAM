@@ -145,11 +145,15 @@ int main() {
                       X(index), V(index),
                       B(index-1), *preint_meas);
 
+    graph->add(imu_factor);
+
     // Does nothing right now?
     imuBias::ConstantBias zero_bias(Vector3(0, 0, 0), Vector3(0, 0, 0));
     graph->add(BetweenFactor<imuBias::ConstantBias>(B(index-1), 
                                                     B(index), 
                                                     zero_bias, bias_noise_model));
+
+
 
     // Estimate next time set
     prop_state = preint_meas->predict(prev_state, prev_bias);
