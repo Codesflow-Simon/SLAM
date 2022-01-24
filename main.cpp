@@ -6,6 +6,7 @@
 #include <math.h>
 #include "lib/sensor.hpp"
 
+#include <gtsam/sam/RangeFactor.h>
 #include <gtsam/slam/dataset.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
@@ -31,7 +32,6 @@ map<string,Vector> dataToVecMap(json jsonObj) {
     {"omega", Eigen::Matrix<double,3,1>::Zero()},
     {"mag", Eigen::Matrix<double,3,1>::Zero()},
     {"range", Eigen::Matrix<double,5,1>::Zero()}};
-
   size_t accElementIndex = 0;
   for (auto& it : jsonObj["acc"]) {
     output["acc"](accElementIndex++) = it;
@@ -51,6 +51,7 @@ map<string,Vector> dataToVecMap(json jsonObj) {
   for (auto& it : jsonObj["meas"]["d"]) {
     output["range"](rangeElementIndex++) = it;
   }
+
   return output;
 }
 
@@ -81,14 +82,12 @@ boost::shared_ptr<PreintegratedImuMeasurements::Params> preintParams() {
 }
 
 class DistanceFactor: public NoiseModelFactor2<Pose3, Vector3> {
-
-  BOOST_CONCEPT_ASSERT((IsTestable<Pose3>));
-  BOOST_CONCEPT_ASSERT((IsLieGroup<Vector3>));
+  typedef DistanceFactor This;
+  typedef NoiseModelFactor2<Pose3, Vector3> Base;
+  typedef boost::shared_ptr<This> shared_ptr;
   double dist_; ///< distance measurement
 
 public:
-  typedef typename boost::shared_ptr<DistanceFactor> shared_ptr;
-
   // Default constructor for serialization
   DistanceFactor() {}
 
@@ -111,25 +110,15 @@ public:
         // Assign H* to Jacobian
         // TODO
         (*H1) = (Matrix(3,6) << 
-        // dist_/magnitude, 0.0, 0.0, 0.0, 0.0, 0.0,
-        // 0.0, dist_/magnitude, 0.0, 0.0, 0.0, 0.0,
-        // 0.0, 0.0, dist_/magnitude, 0.0, 0.0, 0.0)
         1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-        0.0, 0.0, 1,0, 0.0, 0.0, 0.0)
+        0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
         .finished();
       }
       if (H2){
         // Assign H* to Jacobian
         // TODO
-        (*H2) = (Matrix(3,3) << 
-        // -dist_/magnitude, 0.0, 0.0,
-        // 0.0, -dist_/magnitude, 0.0,
-        // 0.0, 0.0, -dist_/magnitude)
-        0.0, 0.0, 0.0,
-        0.0, 0.0, 0.0,
-        0.0, 0.0, 0.0)
-        .finished();
+        (*H2) = (Matrix33::Zero());
       }
       return bodyPos-targetPos;
     }
@@ -139,6 +128,7 @@ public:
 using symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
 using symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
+using symbol_shorthand::A; // Anchor locations  (ax,ay,az,gx,gy,gz)
 
 int main() {  
   int num = 5;
@@ -166,18 +156,17 @@ int main() {
   initial_values.insert(V(index), priorVelocity);
   initial_values.insert(B(index), priorImuBias);
 
-  cout << anchors.at(0) << endl;
-  initial_values.insert(0, anchors.at(0)); // We will use small integers as keys for landmarks
-  initial_values.insert(1, anchors.at(1));
-  initial_values.insert(2, anchors.at(2));
-  initial_values.insert(3, anchors.at(3));
-  initial_values.insert(4, anchors.at(4));
+  initial_values.insert(A(0), anchors.at(0)); // We will use small integers as keys for landmarks
+  initial_values.insert(A(1), anchors.at(1));
+  initial_values.insert(A(2), anchors.at(2));
+  initial_values.insert(A(3), anchors.at(3));
+  initial_values.insert(A(4), anchors.at(4));
 
   noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
   noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,0.1); 
   noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,1e-3);
   noiseModel::Diagonal::shared_ptr anchor_noise_model = noiseModel::Isotropic::Sigma(3,0.1);
-  noiseModel::Diagonal::shared_ptr distance_noise_model = noiseModel::Isotropic::Sigma(3,0.1);
+  noiseModel::Diagonal::shared_ptr distance_noise_model = noiseModel::Isotropic::Sigma(1,0.1);
 
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
   graph->add(PriorFactor<Pose3>(X(index), 
@@ -187,11 +176,11 @@ int main() {
   graph->add(PriorFactor<imuBias::ConstantBias>(B(index), 
     priorImuBias,bias_noise_model));
   
-  graph->add(PriorFactor<Vector3>((Key)0, anchors.at(0), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>((Key)1, anchors.at(1), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>((Key)2, anchors.at(2), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>((Key)3, anchors.at(3), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>((Key)4, anchors.at(4), anchor_noise_model));
+  graph->add(PriorFactor<Vector3>(A(0), anchors.at(0), anchor_noise_model));
+  graph->add(PriorFactor<Vector3>(A(1), anchors.at(1), anchor_noise_model));
+  graph->add(PriorFactor<Vector3>(A(2), anchors.at(2), anchor_noise_model));
+  graph->add(PriorFactor<Vector3>(A(3), anchors.at(3), anchor_noise_model));
+  graph->add(PriorFactor<Vector3>(A(4), anchors.at(4), anchor_noise_model));
 
   auto p = preintParams();
 
@@ -217,7 +206,6 @@ int main() {
 
     auto dataMap = dataToVecMap(jsonObj);
 
-    cout << dataMap["acc"] << endl;
     preint_meas->integrateMeasurement(dataMap["acc"], dataMap["omega"], dt);
     index++;
 
@@ -231,8 +219,13 @@ int main() {
     graph->add(BetweenFactor<imuBias::ConstantBias>(B(index-1), 
                                                     B(index), 
                                                     zero_bias, bias_noise_model));
-    auto myFactor = DistanceFactor(X(index), (Key)0, dataMap["dist"][0], distance_noise_model);
-    graph->add(myFactor);
+
+    graph->add(RangeFactor<Pose3, Vector3, double>(X(index), A(0),
+       (double)(dataMap["range"][0]), distance_noise_model));
+    graph->add(RangeFactor<Pose3, Vector3, double>(X(index), A(1),
+       (double)(dataMap["range"][1]), distance_noise_model));
+    graph->add(RangeFactor<Pose3, Vector3, double>(X(index), A(2),
+       (double)(dataMap["range"][2]), distance_noise_model));
 
     // Estimate next time set
     prop_state = preint_meas->predict(prev_state, prev_bias);
