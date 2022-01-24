@@ -81,18 +81,22 @@ boost::shared_ptr<PreintegratedImuMeasurements::Params> preintParams() {
 }
 
 class DistanceFactor: public NoiseModelFactor2<Pose3, Vector3> {
+
+  BOOST_CONCEPT_ASSERT((IsTestable<Pose3>));
+  BOOST_CONCEPT_ASSERT((IsLieGroup<Vector3>));
   double dist_; ///< distance measurement
 
 public:
+  typedef typename boost::shared_ptr<DistanceFactor> shared_ptr;
+
+  // Default constructor for serialization
+  DistanceFactor() {}
+
   DistanceFactor(Key pose, Key anchor, double dist, const SharedNoiseModel& model):
     NoiseModelFactor2<Pose3, Vector3>(model, pose, anchor), dist_(dist) {}
 
-    Vector unwhitenedError(const Values &x, boost::optional<Matrix&> H = boost::none) const {
-
-    }
-
-    Vector evaluateError(const Pose3 body, const Vector3 anchor,
-                      boost::optional<Matrix&> H = boost::none) const
+    Vector evaluateError(const Pose3& body, const Vector3& anchor, 
+      boost::optional< Matrix & > H1=boost::none, boost::optional< Matrix & > H2=boost::none) const override
     {
       // Return h(q)-m
       // Where q is values
@@ -103,13 +107,28 @@ public:
       double magnitude = norm(anchorToBody);
       Vector3 bodyToAnchorDir = anchorToBody / magnitude;
       Vector3 targetPos = bodyToAnchorDir * dist_;
-      if (H){
+      if (H1){
         // Assign H* to Jacobian
         // TODO
-        (*H) = (Matrix(3,6) << 
-        1/magnitude, 0.0, 0.0, 0.0, 0.0, 0.0,
-        0.0, 1/magnitude, 0.0, 0.0, 0.0, 0.0,
-        0.0, 0.0, 1/magnitude, 0.0, 0.0, 0.0)
+        (*H1) = (Matrix(3,6) << 
+        // dist_/magnitude, 0.0, 0.0, 0.0, 0.0, 0.0,
+        // 0.0, dist_/magnitude, 0.0, 0.0, 0.0, 0.0,
+        // 0.0, 0.0, dist_/magnitude, 0.0, 0.0, 0.0)
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 1,0, 0.0, 0.0, 0.0)
+        .finished();
+      }
+      if (H2){
+        // Assign H* to Jacobian
+        // TODO
+        (*H2) = (Matrix(3,3) << 
+        // -dist_/magnitude, 0.0, 0.0,
+        // 0.0, -dist_/magnitude, 0.0,
+        // 0.0, 0.0, -dist_/magnitude)
+        0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0)
         .finished();
       }
       return bodyPos-targetPos;
@@ -212,8 +231,8 @@ int main() {
     graph->add(BetweenFactor<imuBias::ConstantBias>(B(index-1), 
                                                     B(index), 
                                                     zero_bias, bias_noise_model));
-    // auto myFactor = DistanceFactor(X(index), (Key)0, dataMap["dist"][0], distance_noise_model);
-    // graph->add(myFactor)
+    auto myFactor = DistanceFactor(X(index), (Key)0, dataMap["dist"][0], distance_noise_model);
+    graph->add(myFactor);
 
     // Estimate next time set
     prop_state = preint_meas->predict(prev_state, prev_bias);
