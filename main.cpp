@@ -131,18 +131,19 @@ using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
 using symbol_shorthand::A; // Anchor locations  (ax,ay,az,gx,gy,gz)
 
 int main() {  
-  int num = 5;
+  int num = 20;
   // Load data
   list<json> data = getJson(num);
+  int anchors = data.front()["meas"]["d"].size();
 
   // Pre-measured anchor positions
   // TODO: integreate these measurements into the mode;
-  vector<Vector3> anchors {
+  vector<Vector3> anchorPos {
     Vector3( 0.13,  0.65,  0.47),
-    Vector3( 1.49, -1.06, -0.0 ),
+    Vector3( 0.31, -0.1 ,  0   ),
     Vector3( 1.49, -0.38,  0.8 ),
     Vector3(-0.17,  0.65,  0.82),
-    Vector3( 0.31, -0.1 ,  0   )};
+    Vector3( 1.49, -1.06, -0.0 )};
 
   int index = 0;
 
@@ -156,11 +157,9 @@ int main() {
   initial_values.insert(V(index), priorVelocity);
   initial_values.insert(B(index), priorImuBias);
 
-  initial_values.insert(A(0), anchors.at(0)); // We will use small integers as keys for landmarks
-  initial_values.insert(A(1), anchors.at(1));
-  initial_values.insert(A(2), anchors.at(2));
-  initial_values.insert(A(3), anchors.at(3));
-  initial_values.insert(A(4), anchors.at(4));
+  for (int i=0; i<anchors; i++) {
+    initial_values.insert(A(i), anchorPos.at(i));
+  }
 
   noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
   noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,0.1); 
@@ -176,11 +175,9 @@ int main() {
   graph->add(PriorFactor<imuBias::ConstantBias>(B(index), 
     priorImuBias,bias_noise_model));
   
-  graph->add(PriorFactor<Vector3>(A(0), anchors.at(0), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>(A(1), anchors.at(1), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>(A(2), anchors.at(2), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>(A(3), anchors.at(3), anchor_noise_model));
-  graph->add(PriorFactor<Vector3>(A(4), anchors.at(4), anchor_noise_model));
+  for (int i=0; i<anchors; i++) {
+    graph->add(PriorFactor<Vector3>(A(i), anchorPos.at(i), anchor_noise_model));
+  }
 
   auto p = preintParams();
 
@@ -195,6 +192,7 @@ int main() {
   data.pop_front();
 
   while (data.size() > 0) {
+    cout << "here2";
     json jsonObj = data.front();
     data.pop_front();
     
@@ -220,20 +218,28 @@ int main() {
                                                     B(index), 
                                                     zero_bias, bias_noise_model));
 
-    graph->add(RangeFactor<Pose3, Vector3, double>(X(index), A(0),
-       (double)(dataMap["range"][0]), distance_noise_model));
-    graph->add(RangeFactor<Pose3, Vector3, double>(X(index), A(1),
-       (double)(dataMap["range"][1]), distance_noise_model));
-    graph->add(RangeFactor<Pose3, Vector3, double>(X(index), A(2),
-       (double)(dataMap["range"][2]), distance_noise_model));
+    cout << "here3";
+    for (int i=0; i<anchors; i++) {
+      int id = index*anchors+i;
+      graph->add(RangeFactor<Pose3, Vector3, double>(X(index), A(id),
+        (double)(dataMap["range"][i]), distance_noise_model));
 
+      int prev_id = (index-1)*anchors + i;
+      graph->add(BetweenFactor<Vector3>(A(prev_id), A(id), Vector3(0,0,0), anchor_noise_model));
+    }
+
+    cout << "here4";
     // Estimate next time set
     prop_state = preint_meas->predict(prev_state, prev_bias);
     
     initial_values.insert(X(index), prop_state.pose());
     initial_values.insert(V(index), prop_state.v());
     initial_values.insert(B(index), prev_bias);
-
+    for (int i=0; i<anchors; i++) {
+      int id = index*anchors+i;
+      initial_values.insert(A(id), anchorPos.at(i));
+    }
+    cout << "here 5";
     LevenbergMarquardtOptimizer optimizer(*graph, initial_values);
     Values result = optimizer.optimize();
 
@@ -241,13 +247,37 @@ int main() {
                       result.at<Vector3>(V(index)));
     prev_bias = result.at<imuBias::ConstantBias>(B(index));
 
+    for (int i=0; i<anchors; i++) {
+      int id = index*anchors+i;
+      anchorPos.at(i) = result.at<Vector3>(A(id));
+    }
+
     preint_meas->resetIntegrationAndSetBias(prev_bias);
 
-    cout << prev_state << endl;
+    Vector3 toTag = prev_state.t();
 
+    cout << "tag at " << toTag << endl;
+    Quaternion rot = prev_state.quaternion();
+    cout << "rot " << rot.w() << ", " <<  rot.x() << ", " << rot.y() << ", " << rot.z() <<endl;
+
+    double distanceMSE = 0;
+
+    for (int i=0; i<anchors; i++) {
+      cout << "anchor " << i << " at " << anchorPos.at(i) << endl;
+      Vector3 tagToAnchor = anchorPos.at(i) - toTag;
+      double sign_err = dataMap["range"][i] - norm(tagToAnchor);
+      cout << "(norm = " << norm(tagToAnchor) << ")" << endl;
+      double sq_err = sign_err * sign_err;
+      distanceMSE += sq_err;
+    }
+
+    distanceMSE = distanceMSE / anchors;
+      
+    cout << "distance rmse: " << sqrt(distanceMSE) << endl;
     if (data.size() == 0) {
       data = getJson(num);
     }
+    cout << "\\"<< endl;
   }
   return 0;
 }
