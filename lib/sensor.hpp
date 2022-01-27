@@ -8,4 +8,8 @@
 using json = nlohmann::json;
 using namespace std;
 
-list<json> getJson(unsigned int num=1);
+list<json> getJsonList(unsigned int num=1);
+
+json getJson();
+
+void writeData(int num);

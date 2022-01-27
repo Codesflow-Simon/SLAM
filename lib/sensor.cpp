@@ -1,5 +1,6 @@
 #include <termios.h> // Contains POSIX terminal control definitions
 #include <iostream>
+#include <fstream>
 #include <fcntl.h>    // For O_RDWR
 #include <unistd.h>   // For open(), creat()
 #include <list>
@@ -8,7 +9,7 @@
 using json = nlohmann::json;
 using namespace std;
 
-list<json> getJson(unsigned int num=1) {
+list<json> getJsonList(unsigned int num=1) {
   list<json> output;
 
   int USB = open("/dev/ttyS4", O_RDWR| O_NOCTTY);
@@ -76,8 +77,17 @@ list<json> getJson(unsigned int num=1) {
   close(USB);
   return output;
 }
+json getJson() {
+  return getJsonList().front();
+}
 
-// int main() {
-//   cout << getJson();
-//   return 0;
-// }
+void writeData(int num) {
+  std::ofstream file;
+  file.open ("sensors.csv");
+  file << "acc,omega,mag,range\n";
+  for (int i=0; i<num; i++) {
+    auto data = getJson();
+    file << data["acc"] << "," << data["gyro"] << "," << data["mag"] << "," << data["meas"]["d"] << "\n";
+  }
+  file.close();
+}
