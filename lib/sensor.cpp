@@ -82,7 +82,7 @@ json getJson() {
 }
 
 void writeData(int num) {
-  std::ofstream file;
+  ofstream file;
   file.open ("sensors.csv");
   file << "acc,omega,mag,range\n";
   for (int i=0; i<num; i++) {

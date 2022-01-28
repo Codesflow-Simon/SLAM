@@ -15,6 +15,7 @@
 #include <gtsam/navigation/MagFactor.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/nonlinear/ISAM2.h>
 
 using namespace std;
 using namespace gtsam;
@@ -64,7 +65,6 @@ map<string,Vector> dataToVecMap(json jsonObj) {
   for (auto& it : jsonObj["meas"]["d"]) {
     output["range"](rangeElementIndex++) = it;
   }
-
   return output;
 }
 
@@ -113,7 +113,17 @@ PreintegratedImuMeasurements* addIMUPriors(NonlinearFactorGraph *graph, Values *
   return preint_meas;
 }
 
-vector<Vector3> calibrate(int steps=100) {
+ISAM2 getIsam() {
+  ISAM2Params parameters;
+  parameters.relinearizeThreshold = 0.01;
+  parameters.relinearizeSkip = 1;
+  parameters.cacheLinearizedFactors = false;
+  parameters.enableDetailedResults = true;
+  ISAM2 isam(parameters);
+  return isam;
+}
+
+vector<Vector3> calibrate(int steps=50) {
   cout << "calibrating, move the tag around" << endl;
   // Prior anchor positions
   json data = getJson();
@@ -138,17 +148,23 @@ vector<Vector3> calibrate(int steps=100) {
   double initial_time = data["ts"];
   double current_time = initial_time;
 
-  auto dataList = getJsonList(steps);
   for (int index=1; index<steps; index++) {  
+    cout << index << endl;
     if (index==steps-15) { cout << "return tag to original location" << endl; }
 
-    data = dataList.front();
-    dataList.pop_front();
+    data = getJson();
     auto dataMap = dataToVecMap(data);
+    try {
+      dataMap["acc"];
+      dataMap["omega"];
+      dataMap["range"];
+      dataMap["mag"];
+    } catch (const out_of_range& e) {
+      continue;
+    }
 
     double dt = (double)data["ts"] - current_time;
     current_time += dt;
-
     preint_meas->integrateMeasurement(dataMap["acc"], dataMap["omega"], dt);
 
     // Add new factors
@@ -166,7 +182,6 @@ vector<Vector3> calibrate(int steps=100) {
       graph->add(RangeFactor<Pose3, Vector3, double>(X(index), (Key)i,
         (double)(dataMap["range"][i]), distance_noise_model));
     }
-
     // Add loop closure for last and first elements
     if (index == steps-1) {
       graph->add(BetweenFactor<Pose3>(X(0), X(index), Pose3(), pose_noise_model));
@@ -179,10 +194,11 @@ vector<Vector3> calibrate(int steps=100) {
     values.insert(V(index), prop_state.v());
     values.insert(B(index), prev_bias);
 
-    // out of range error here
     LevenbergMarquardtOptimizer optimizer(*graph, values);
+    // out of range error here
     Values result = optimizer.optimize();
 
+    // result.print();
     prev_state = NavState(result.at<Pose3>(X(index)),
                       result.at<Vector3>(V(index)));
     prev_bias = result.at<imuBias::ConstantBias>(B(index));
@@ -208,11 +224,13 @@ int main() {
 
   Values values;
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
+  ISAM2 isam = getIsam();
   auto preint_meas = addIMUPriors(graph, &values);
 
   for (int i=0; i<anchors; i++) {
-    values.insert((Key)i, anchorPos.at(i));
     cout << anchorPos.at(i) << endl;
+    values.insert((Key)i, anchorPos.at(i));
+    graph -> add(PriorFactor<Vector3>((Key)i, Vector3(0,0,0), anchor_noise_model));
   }
 
   NavState prev_state = NavState(Pose3(), Vector3(0,0,0));
@@ -263,37 +281,14 @@ int main() {
     values.insert(B(index), prev_bias);
 
     // out of range error here
-    LevenbergMarquardtOptimizer optimizer(*graph, values);
-    Values result = optimizer.optimize();
+    ISAM2Result result = isam.update(*graph, values);
+    result.print();
 
-    prev_state = NavState(result.at<Pose3>(X(index)),
-                      result.at<Vector3>(V(index)));
-    prev_bias = result.at<imuBias::ConstantBias>(B(index));
+    // prev_state = NavState(result.at<Pose3>(X(index)),
+    //                   result.at<Vector3>(V(index)));
+    // prev_bias = result.at<imuBias::ConstantBias>(B(index));
 
-    preint_meas->resetIntegrationAndSetBias(prev_bias);
-
-    // Print infomation
-    Vector3 toTag = prev_state.t();
-
-    cout << "i = " << index << ", dt = " << dt << endl; 
-    cout << "tag at " << toTag << endl;
-    // Quaternion rot = prev_state.quaternion();
-    // cout << "rot " << rot.w() << ", " <<  rot.x() << ", " << rot.y() << ", " << rot.z() <<endl;
-
-    double distanceMSE = 0;
-
-    for (int i=0; i<anchors; i++) {
-      // cout << "anchor " << i << " at " << anchorPos.at(i) << endl;
-      Vector3 tagToAnchor = anchorPos.at(i) - toTag;
-      double sign_err = dataMap["range"][i] - norm(tagToAnchor);
-      // cout << "(norm = " << norm(tagToAnchor) << ")" << endl;
-      double sq_err = sign_err * sign_err;
-      distanceMSE += sq_err;
-    }
-
-    distanceMSE = distanceMSE / anchors;
-      
-    cout << "distance rmse: " << sqrt(distanceMSE) << endl;
+    // preint_meas->resetIntegrationAndSetBias(prev_bias);
   } 
   return 0;
 }
