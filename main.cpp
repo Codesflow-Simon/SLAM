@@ -5,6 +5,7 @@
 #include <map>
 #include <math.h>
 #include "lib/sensor.hpp"
+#include <unistd.h>
 
 #include <gtsam/sam/RangeFactor.h>
 #include <gtsam/slam/dataset.h>
@@ -25,11 +26,13 @@ using symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
 
 // Noise models
-noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.01, 0.01, 0.01, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
-noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,0.1); 
-noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,1e-3);
-noiseModel::Diagonal::shared_ptr anchor_noise_model = noiseModel::Isotropic::Sigma(3,10);
+noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.1, 0.1, 0.1, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
+noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,5); 
+noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,1);
+noiseModel::Diagonal::shared_ptr anchor_noise_model = noiseModel::Isotropic::Sigma(3,0.1);
 noiseModel::Diagonal::shared_ptr distance_noise_model = noiseModel::Isotropic::Sigma(1,0.1);
+
+ofstream debugLog;
 
 /* A simple function to calculate the norm of a vector 3 */
 double norm(Vector3 vec) {
@@ -41,11 +44,13 @@ double norm(Vector3 vec) {
 
 /* Transforms the json object into a map of vectors */
 map<string,Vector> dataToVecMap(json jsonObj) {
+   const unsigned int anchors = sizeof(jsonObj["meas"]["d"]);
+
   map<string, Vector> output {
     {"acc", Eigen::Matrix<double,3,1>::Zero()},
     {"omega", Eigen::Matrix<double,3,1>::Zero()},
     {"mag", Eigen::Matrix<double,3,1>::Zero()},
-    {"range", Eigen::Matrix<double,5,1>::Zero()}};
+    {"range", Eigen::Matrix<double,anchors,1>::Zero()}};
   size_t accElementIndex = 0;
   for (auto& it : jsonObj["acc"]) {
     output["acc"](accElementIndex++) = it;
@@ -123,100 +128,114 @@ ISAM2 getIsam() {
   return isam;
 }
 
-vector<Vector3> calibrate(int steps=50) {
-  cout << "calibrating, move the tag around" << endl;
-  // Prior anchor positions
+void logMeasurements(json data) {
+  debugLog << "acc = " << data["acc"] << endl;
+  debugLog << "omega = " << data["gyro"] << endl;
+  debugLog << "range = " << data["meas"]["d"] << endl;
+  debugLog << "mag = " << data["mag"] << endl;
+}
+
+vector<Vector3> calibrate() {
+  cout << "begin calibration" << endl;
+  debugLog << "fixed point calibration" << endl;
+
   json data = getJson();
-  int anchors = data["meas"]["d"].size();
+  const int anchors = data["meas"]["d"].size();
 
   Values values;
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
-  auto preint_meas = addIMUPriors(graph, &values);
 
-  auto anchorPos = vector<Vector3>(anchors);
   for (int i=0; i<anchors; i++) {
-    anchorPos.at(i) = Vector3(0,0,0);
     values.insert((Key)i, Vector3(0,0,0));
-    graph -> add(PriorFactor<Vector3>((Key)i, Vector3(0,0,0), anchor_noise_model));
+    // graph -> add(PriorFactor<Vector3>((Key)i, Vector3(0,0,0), anchor_noise_model));
   }
-  
-  NavState prev_state = NavState(Pose3(), Vector3(0,0,0));
-  NavState prop_state = prev_state;
-  imuBias::ConstantBias prev_bias = imuBias::ConstantBias();
 
-  data = getJson();
-  double initial_time = data["ts"];
-  double current_time = initial_time;
-
-  for (int index=1; index<steps; index++) {  
-    cout << index << endl;
-    if (index==steps-15) { cout << "return tag to original location" << endl; }
+  // Fixed point calibration
+  for (int i=0; i<6; i++) {
+    Pose3 pos;
+    if (i==0) {
+      cout << "place tag at origin" << endl;
+      pos = Pose3();
+    } else if (i==1) {
+      cout << "move tag forward 1m (+y)" << endl;
+      pos = Pose3(Rot3(), Vector3(0,1,0));
+    } else if (i==2) {
+      cout << "move tag right 1m (+x)" << endl;
+      pos = Pose3(Rot3(), Vector3(1,1,0));
+    } else if (i==3) {
+      cout << "move tag back 1m (-y)" << endl;
+      pos = Pose3(Rot3(), Vector3(1,0,0));
+    } else if (i==4) {
+      cout << "move tag left 1m (-x)" << endl;
+      pos = Pose3();
+    } else if (i==5) {
+      cout << "move tag up 1m (+z)" << endl;
+      pos = Pose3(Rot3(), Vector3(0,0,1));
+    }
+    sleep(10);
+    debugLog << "calibration " << i << " " << pos << "\nmeasurements\n";
 
     data = getJson();
-    auto dataMap = dataToVecMap(data);
-    try {
-      dataMap["acc"];
-      dataMap["omega"];
-      dataMap["range"];
-      dataMap["mag"];
-    } catch (const out_of_range& e) {
-      continue;
-    }
+    logMeasurements(data);
 
-    double dt = (double)data["ts"] - current_time;
-    current_time += dt;
-    preint_meas->integrateMeasurement(dataMap["acc"], dataMap["omega"], dt);
+    values.insert(X(i), pos);
+    graph->add(PriorFactor<Pose3>(X(i), pos, pose_noise_model));  
 
-    // Add new factors
-    ImuFactor imu_factor(X(index-1), V(index-1),
-                      X(index), V(index),
-                      B(index-1), *preint_meas);
-    graph->add(imu_factor);
-
-    imuBias::ConstantBias zero_bias(Vector3(0, 0, 0), Vector3(0, 0, 0));
-    graph->add(BetweenFactor<imuBias::ConstantBias>(B(index-1), 
-                                                    B(index), 
-                                                    zero_bias, bias_noise_model));
-
-    for (int i=0; i<anchors; i++) {
-      graph->add(RangeFactor<Pose3, Vector3, double>(X(index), (Key)i,
-        (double)(dataMap["range"][i]), distance_noise_model));
-    }
-    // Add loop closure for last and first elements
-    if (index == steps-1) {
-      graph->add(BetweenFactor<Pose3>(X(0), X(index), Pose3(), pose_noise_model));
-    }
-
-    // Estimate next time set
-    prop_state = preint_meas->predict(prev_state, prev_bias);
-    
-    values.insert(X(index), prop_state.pose());
-    values.insert(V(index), prop_state.v());
-    values.insert(B(index), prev_bias);
-
-    LevenbergMarquardtOptimizer optimizer(*graph, values);
-    // out of range error here
-    Values result = optimizer.optimize();
-
-    // result.print();
-    prev_state = NavState(result.at<Pose3>(X(index)),
-                      result.at<Vector3>(V(index)));
-    prev_bias = result.at<imuBias::ConstantBias>(B(index));
-
-    preint_meas->resetIntegrationAndSetBias(prev_bias);
-
-    for (int i=0; i<anchors; i++) {
-      anchorPos.at(i) = result.at<Vector3>((Key)i);
+    for (int j=0; j<anchors; j++) {
+      graph->add(RangeFactor<Pose3,Vector3,double>(X(i), (Key)j , data["meas"]["d"][j], distance_noise_model));
     }
   }
+
+  debugLog << "doing anchor calibration" << endl;
+  cout << "doing anchor calibration" << endl;
+
+  // Anchor calibration
+  bool anchorsDone[anchors];
+  int numAnchorsDone = 0;
+  while (numAnchorsDone < anchors) {
+    data = getJson();
+    logMeasurements(data);
+    for (int i=0; i<anchors; i++) {
+      debugLog << "size " << (unsigned int)anchors << endl;
+      if (data["meas"]["d"].size() == (unsigned int)anchors && data["meas"]["d"][i] < 0 && !anchorsDone[i]) {
+        cout << "Near anchor " << i << ", hold still..." <<endl;
+        debugLog << "located anchor " << i << "\nmeasurements:\n";
+        sleep(2);
+        auto data = getJson();
+        cout << "done!" << endl;
+        for (int j=0; j<anchors; j++) {
+          if (i==j) { continue; }
+          graph -> add(RangeFactor<Vector3, Vector3, double>((Key)i, (Key)j, data["meas"]["d"][j], distance_noise_model));
+        }
+        numAnchorsDone++;
+        anchorsDone[i] = true;
+      }
+    }
+    sleep(1);
+  }
+  
+  graph->print();
+  LevenbergMarquardtOptimizer optimizer(*graph, values);
+  values = optimizer.optimize(); 
+
+  vector<Vector3> anchorPos(anchors);
+  for (int i=0; i<anchors; i++) {
+    anchorPos.at(i) = values.at<Vector3>((Key)i);
+  }
+  cout << "calibration finishing, return to origin" << endl;
+  sleep(10);
   cout << "calibration done!" << endl;
+  debugLog << "calibration done" << endl;
   return anchorPos;
 }
 
 int main() {  
+  debugLog.open("log", ofstream::out | ofstream::trunc);
+  debugLog << "running program\n";
+
   // Load data
   json data = getJson();
-  int anchors = data["meas"]["d"].size();
+  const int anchors = data["meas"]["d"].size();
 
   int index = 0;
 
@@ -268,17 +287,21 @@ int main() {
                                                     B(index), 
                                                     zero_bias, bias_noise_model));
 
-    for (int i=0; i<anchors; i++) {
-      graph->add(RangeFactor<Pose3, Vector3, double>(X(index), (Key)i,
-        (double)(dataMap["range"][i]), distance_noise_model));
-
-    }
     // Estimate next time set
     prop_state = preint_meas->predict(prev_state, prev_bias);
     
     values.insert(X(index), prop_state.pose());
     values.insert(V(index), prop_state.v());
     values.insert(B(index), prev_bias);
+
+    if (data["meas"]["d"].size() != (unsigned int)anchors) {
+      continue;
+    } else {
+      for (int i=0; i<anchors; i++) {
+      graph->add(RangeFactor<Pose3, Vector3, double>(X(index), (Key)i,
+        (double)(dataMap["range"][i]), distance_noise_model));
+      }
+    }
 
     // out of range error here
     ISAM2Result result = isam.update(*graph, values);
