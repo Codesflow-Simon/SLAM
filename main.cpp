@@ -27,8 +27,8 @@ using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
 
 // Noise models
 noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.1, 0.1, 0.1, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
-noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,5); 
-noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,1);
+noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,0.1); 
+noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,0.1);
 noiseModel::Diagonal::shared_ptr anchor_noise_model = noiseModel::Isotropic::Sigma(3,0.1);
 noiseModel::Diagonal::shared_ptr distance_noise_model = noiseModel::Isotropic::Sigma(1,0.1);
 
@@ -145,34 +145,47 @@ vector<Vector3> calibrate() {
   Values values;
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
 
-  for (int i=0; i<anchors; i++) {
-    values.insert((Key)i, Vector3(0,0,0));
-    // graph -> add(PriorFactor<Vector3>((Key)i, Vector3(0,0,0), anchor_noise_model));
-  }
+
+  values.insert((Key)0, Vector3(-2,-1,2));
+  graph -> add(PriorFactor<Vector3>((Key)0, Vector3(-2,-1,2), anchor_noise_model));
+  values.insert((Key)1, Vector3(-1,1.5,3));
+  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(-1,1.5,3), anchor_noise_model));
+  values.insert((Key)1, Vector3(-2,0,1));
+  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(-2,0,1), anchor_noise_model));
+  values.insert((Key)1, Vector3(1,-0.5,0));
+  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(1,-0.5,0), anchor_noise_model));
+  values.insert((Key)1, Vector3(0,-2,0));
+  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(1,-2,0), anchor_noise_model));
 
   // Fixed point calibration
-  for (int i=0; i<6; i++) {
+  for (int i=0; i<8; i++) {
     Pose3 pos;
     if (i==0) {
-      cout << "place tag at origin" << endl;
+      cout << "place tag at origin (0,0,0)" << endl;
       pos = Pose3();
     } else if (i==1) {
-      cout << "move tag forward 1m (+y)" << endl;
+      cout << "move tag to (0,1,0)" << endl;
       pos = Pose3(Rot3(), Vector3(0,1,0));
     } else if (i==2) {
-      cout << "move tag right 1m (+x)" << endl;
+      cout << "move tag to (1,1,0)" << endl;
       pos = Pose3(Rot3(), Vector3(1,1,0));
     } else if (i==3) {
-      cout << "move tag back 1m (-y)" << endl;
+      cout << "move tag to (1,0,0)" << endl;
       pos = Pose3(Rot3(), Vector3(1,0,0));
     } else if (i==4) {
-      cout << "move tag left 1m (-x)" << endl;
-      pos = Pose3();
-    } else if (i==5) {
-      cout << "move tag up 1m (+z)" << endl;
+      cout << "move tag to (0,0,1)" << endl;
       pos = Pose3(Rot3(), Vector3(0,0,1));
-    }
-    sleep(10);
+    } else if (i==5) {
+      cout << "move tag to (0,1,1)" << endl;
+      pos = Pose3(Rot3(), Vector3(0,1,1));
+    } else if (i==6) {
+      cout << "move tag to (1,1,1)" << endl;
+      pos = Pose3(Rot3(), Vector3(1,1,1));
+    } else if (i==7) {
+      cout << "move tag to (1,0,1)" << endl;
+      pos = Pose3(Rot3(), Vector3(1,0,1));
+    } 
+    sleep(5);
     debugLog << "calibration " << i << " " << pos << "\nmeasurements\n";
 
     data = getJson();
@@ -185,42 +198,21 @@ vector<Vector3> calibrate() {
       graph->add(RangeFactor<Pose3,Vector3,double>(X(i), (Key)j , data["meas"]["d"][j], distance_noise_model));
     }
   }
-
-  debugLog << "doing anchor calibration" << endl;
-  cout << "doing anchor calibration" << endl;
-
-  // Anchor calibration
-  bool anchorsDone[anchors];
-  int numAnchorsDone = 0;
-  while (numAnchorsDone < anchors) {
-    data = getJson();
-    logMeasurements(data);
-    for (int i=0; i<anchors; i++) {
-      debugLog << "size " << (unsigned int)anchors << endl;
-      if (data["meas"]["d"].size() == (unsigned int)anchors && data["meas"]["d"][i] < 0 && !anchorsDone[i]) {
-        cout << "Near anchor " << i << ", hold still..." <<endl;
-        debugLog << "located anchor " << i << "\nmeasurements:\n";
-        sleep(2);
-        auto data = getJson();
-        cout << "done!" << endl;
-        for (int j=0; j<anchors; j++) {
-          if (i==j) { continue; }
-          graph -> add(RangeFactor<Vector3, Vector3, double>((Key)i, (Key)j, data["meas"]["d"][j], distance_noise_model));
-        }
-        numAnchorsDone++;
-        anchorsDone[i] = true;
-      }
-    }
-    sleep(1);
-  }
   
   graph->print();
+  debugLog << "before optimization" << endl;
+  for (int i=0; i<anchors; i++) {
+    debugLog << "anchor " << i << " at " << values.at<Vector3>((Key)i);
+  }
+  debugLog << "optimizing" << endl;
   LevenbergMarquardtOptimizer optimizer(*graph, values);
   values = optimizer.optimize(); 
 
+  debugLog << "after optimization" << endl;
   vector<Vector3> anchorPos(anchors);
   for (int i=0; i<anchors; i++) {
     anchorPos.at(i) = values.at<Vector3>((Key)i);
+    debugLog << "anchor " << i << " at " << values.at<Vector3>((Key)i);
   }
   cout << "calibration finishing, return to origin" << endl;
   sleep(10);
@@ -306,6 +298,9 @@ int main() {
     // out of range error here
     ISAM2Result result = isam.update(*graph, values);
     result.print();
+
+    graph->resize(0);
+    values.clear();
 
     // prev_state = NavState(result.at<Pose3>(X(index)),
     //                   result.at<Vector3>(V(index)));
