@@ -13,7 +13,6 @@
 #include <gtsam/slam/PriorFactor.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/navigation/ImuFactor.h>
-#include <gtsam/navigation/MagFactor.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/ISAM2.h>
@@ -26,11 +25,12 @@ using symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
 
 // Noise models
-noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.1, 0.1, 0.1, 0.5, 0.5, 0.5).finished()); // rad,rad,rad,m, m, m
-noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,0.1); 
+noiseModel::Diagonal::shared_ptr pose_noise_model = noiseModel::Diagonal::Sigmas((Vector(6) << 0.01, 0.01, 0.01, 1.0, 1.0, 1.0).finished()); // rad,rad,rad,m, m, m
+noiseModel::Diagonal::shared_ptr velocity_noise_model = noiseModel::Isotropic::Sigma(3,5); 
 noiseModel::Diagonal::shared_ptr bias_noise_model = noiseModel::Isotropic::Sigma(6,0.1);
-noiseModel::Diagonal::shared_ptr anchor_noise_model = noiseModel::Isotropic::Sigma(3,0.1);
-noiseModel::Diagonal::shared_ptr distance_noise_model = noiseModel::Isotropic::Sigma(1,0.1);
+noiseModel::Diagonal::shared_ptr anchor_noise_model = noiseModel::Isotropic::Sigma(3,0.5);
+noiseModel::Diagonal::shared_ptr distance_noise_model = noiseModel::Isotropic::Sigma(1,0.2);
+noiseModel::Diagonal::shared_ptr mag_noise_model = noiseModel::Isotropic::Sigma(3,0.2);
 
 ofstream debugLog;
 
@@ -42,6 +42,10 @@ double norm(Vector3 vec) {
   return sqrt(sq_x + sq_y + sq_z);
 }
 
+Rot3 vectorsToRot(Unit3 a, Unit3 b) {
+  Unit3 axis = a.cross(b);
+  return Rot3::AlignPair(axis, a, b);
+ }
 /* Transforms the json object into a map of vectors */
 map<string,Vector> dataToVecMap(json jsonObj) {
    const unsigned int anchors = sizeof(jsonObj["meas"]["d"]);
@@ -120,8 +124,8 @@ PreintegratedImuMeasurements* addIMUPriors(NonlinearFactorGraph *graph, Values *
 
 ISAM2 getIsam() {
   ISAM2Params parameters;
-  parameters.relinearizeThreshold = 0.01;
-  parameters.relinearizeSkip = 1;
+  parameters.relinearizeThreshold = 0.001;
+  parameters.relinearizeSkip = 5;
   parameters.cacheLinearizedFactors = false;
   parameters.enableDetailedResults = true;
   ISAM2 isam(parameters);
@@ -135,7 +139,50 @@ void logMeasurements(json data) {
   debugLog << "mag = " << data["mag"] << endl;
 }
 
+class BFieldFactor: public NoiseModelFactor1<Pose3> {
+  const Rot3 measured_;
+  const Rot3 initial_;
+
+public:
+  BFieldFactor(Key key, const Vector3& measured, const Rot3& initial,
+    const SharedNoiseModel& model) :
+    NoiseModelFactor1<Pose3>(model, key), 
+    measured_(measured), initial_(initial) {}
+
+  Vector evaluateError(const Pose3 &pose, boost::optional< Matrix & > H=boost::none) const override {
+    double scale = norm(measured);
+    Rot3 dir = initial * pose.rotation();
+    Vector3 hq = Vector3(0,1,0) * dir * scale;
+
+
+    if (H) {
+      Matrix33 initial_mat = initial.matrix();
+      h01 = initial_mat.coeff(0,1);
+      h11 = initial_mat.coeff(1,1);
+      h21 = initial_mat.coeff(2,1);
+
+      Matrix33 pose_mat = pose.rotation().matrix();
+      r00 = pose_mat.coeff(0,0);
+      r10 = pose_mat.coeff(1,0);
+      r20 = pose_mat.coeff(2,0);
+      r01 = pose_mat.coeff(0,1);
+      r11 = pose_mat.coeff(1,1);
+      r21 = pose_mat.coeff(2,1);
+      r02 = pose_mat.coeff(0,2);
+      r12 = pose_mat.coeff(1,2);
+      r22 = pose_mat.coeff(2,2);
+
+      H* = Matrix(3,6) << 0, 0, 0, r00*h01, 0, 0, 
+                          0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0
+    }
+
+    return hq - measured_;
+  }
+};
+
 vector<Vector3> calibrate() {
+  // Todo, save calibration
   cout << "begin calibration" << endl;
   debugLog << "fixed point calibration" << endl;
 
@@ -150,12 +197,12 @@ vector<Vector3> calibrate() {
   graph -> add(PriorFactor<Vector3>((Key)0, Vector3(-2,-1,2), anchor_noise_model));
   values.insert((Key)1, Vector3(-1,1.5,3));
   graph -> add(PriorFactor<Vector3>((Key)1, Vector3(-1,1.5,3), anchor_noise_model));
-  values.insert((Key)1, Vector3(-2,0,1));
-  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(-2,0,1), anchor_noise_model));
-  values.insert((Key)1, Vector3(1,-0.5,0));
-  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(1,-0.5,0), anchor_noise_model));
-  values.insert((Key)1, Vector3(0,-2,0));
-  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(1,-2,0), anchor_noise_model));
+  values.insert((Key)2, Vector3(-2,0,1));
+  graph -> add(PriorFactor<Vector3>((Key)2, Vector3(-2,0,1), anchor_noise_model));
+  values.insert((Key)3, Vector3(1,-0.5,0));
+  graph -> add(PriorFactor<Vector3>((Key)3, Vector3(1,-0.5,0), anchor_noise_model));
+  values.insert((Key)4, Vector3(0,-2,0));
+  graph -> add(PriorFactor<Vector3>((Key)4, Vector3(1,-2,0), anchor_noise_model));
 
   // Fixed point calibration
   for (int i=0; i<8; i++) {
@@ -229,19 +276,31 @@ int main() {
   json data = getJson();
   const int anchors = data["meas"]["d"].size();
 
+  Rot3 initMag = vectorsToRot(Unit3(0,1,0), (Unit3)dataToVecMap(data)["mag"]);
+
   int index = 0;
 
-  auto anchorPos = calibrate();
+  // auto anchorPos = calibrate();
+  // Pre-calibrated values
+  vector<Vector3> anchorPos(anchors);
+  anchorPos.at(0) = {-2.13621, -0.479968, 1.53154};
+  anchorPos.at(1) = {-0.924094, 1.3792, 2.70215};
+  anchorPos.at(2) = {-1.76413, -0.168566, 1.27901};
+  anchorPos.at(3) = {1.66293, -1.52572, 1.23659};
+  anchorPos.at(4) = {0.266235, -1.17323, -0.774018};
+
+  debugLog << "creating structures" << endl;
 
   Values values;
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
   ISAM2 isam = getIsam();
   auto preint_meas = addIMUPriors(graph, &values);
 
+  debugLog << "creating anchor priors" << endl;
+
   for (int i=0; i<anchors; i++) {
-    cout << anchorPos.at(i) << endl;
     values.insert((Key)i, anchorPos.at(i));
-    graph -> add(PriorFactor<Vector3>((Key)i, Vector3(0,0,0), anchor_noise_model));
+    graph -> add(PriorFactor<Vector3>((Key)i, anchorPos.at(i), anchor_noise_model));
   }
 
   NavState prev_state = NavState(Pose3(), Vector3(0,0,0));
@@ -254,8 +313,11 @@ int main() {
 
   while (true) {
     index++;
+    debugLog << "loop = " << index << endl;
     
+    debugLog << "getting data" << endl;
     data = getJson();
+    logMeasurements(data);
     
     double dt = (double)data["ts"] - current_time;
     if (dt > 0.1) {
@@ -265,6 +327,7 @@ int main() {
 
     auto dataMap = dataToVecMap(data);
 
+    debugLog << "creating IMU factor" << endl;
     preint_meas->integrateMeasurement(dataMap["acc"], dataMap["omega"], dt);
 
     // Add new factors
@@ -286,14 +349,24 @@ int main() {
     values.insert(V(index), prop_state.v());
     values.insert(B(index), prev_bias);
 
-    if (data["meas"]["d"].size() != (unsigned int)anchors) {
-      continue;
-    } else {
-      for (int i=0; i<anchors; i++) {
-      graph->add(RangeFactor<Pose3, Vector3, double>(X(index), (Key)i,
-        (double)(dataMap["range"][i]), distance_noise_model));
-      }
+    debugLog << "creating B Field factor" << endl;
+
+    graph -> add(BFieldFactor(X(index), dataMap["mag"], initMag, mag_noise_model));
+
+    debugLog << "creating range factors" << endl;
+
+    // Sensors can miss a measurement
+    if (data["meas"]["d"].size() != (unsigned int)anchors) { continue; }
+
+    for (int i=0; i<anchors; i++) {
+    graph->add(RangeFactor<Pose3, Vector3, double>(X(index), (Key)i,
+      dataMap["range"][i], distance_noise_model));
     }
+
+    debugLog << "before optimisation" << endl;
+    debugLog << "pose: " << prop_state.pose() << endl;
+    debugLog << "vel: " << prop_state.v() << endl;
+    debugLog << "bias: " << prev_bias << endl;
 
     // out of range error here
     ISAM2Result result = isam.update(*graph, values);
@@ -301,12 +374,6 @@ int main() {
 
     graph->resize(0);
     values.clear();
-
-    // prev_state = NavState(result.at<Pose3>(X(index)),
-    //                   result.at<Vector3>(V(index)));
-    // prev_bias = result.at<imuBias::ConstantBias>(B(index));
-
-    // preint_meas->resetIntegrationAndSetBias(prev_bias);
   } 
   return 0;
 }
