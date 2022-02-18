@@ -59,6 +59,7 @@ list<json> getJsonList(unsigned int num=1) {
   // Read "num" many full jsons 
   do {
       n = read( USB, &buf, 1);
+      // cout << buf;
       response[spot] = buf;
       spot += n;
       if (buf == '\n') {
@@ -77,8 +78,14 @@ list<json> getJsonList(unsigned int num=1) {
   close(USB);
   return output;
 }
+
 json getJson() {
   return getJsonList().front();
+}
+
+void sendA2a() {
+  int USB = open("/dev/ttyS4", O_RDWR| O_NOCTTY);
+  write(USB, &"node a2a 10", 11);
 }
 
 void writeData(int num) {

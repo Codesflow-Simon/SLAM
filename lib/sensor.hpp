@@ -12,4 +12,6 @@ list<json> getJsonList(unsigned int num=1);
 
 json getJson();
 
+void sendA2a();
+
 void writeData(int num);

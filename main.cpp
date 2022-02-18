@@ -140,7 +140,7 @@ void logMeasurements(json data) {
 }
 
 class BFieldFactor: public NoiseModelFactor1<Pose3> {
-  const Rot3 measured_;
+  const Vector3 measured_;
   const Rot3 initial_;
 
 public:
@@ -150,31 +150,30 @@ public:
     measured_(measured), initial_(initial) {}
 
   Vector evaluateError(const Pose3 &pose, boost::optional< Matrix & > H=boost::none) const override {
-    double scale = norm(measured);
-    Rot3 dir = initial * pose.rotation();
-    Vector3 hq = Vector3(0,1,0) * dir * scale;
-
+    double scale = norm(measured_);
+    Rot3 dir = initial_ * pose.rotation();
+    Vector3 hq = scale * dir.matrix() * Vector3(0,1,0);
 
     if (H) {
-      Matrix33 initial_mat = initial.matrix();
-      h01 = initial_mat.coeff(0,1);
-      h11 = initial_mat.coeff(1,1);
-      h21 = initial_mat.coeff(2,1);
+      Matrix33 initial_mat = initial_.matrix();
+      double h01 = initial_mat.coeff(0,1);
+      double h11 = initial_mat.coeff(1,1);
+      double h21 = initial_mat.coeff(2,1);
 
       Matrix33 pose_mat = pose.rotation().matrix();
-      r00 = pose_mat.coeff(0,0);
-      r10 = pose_mat.coeff(1,0);
-      r20 = pose_mat.coeff(2,0);
-      r01 = pose_mat.coeff(0,1);
-      r11 = pose_mat.coeff(1,1);
-      r21 = pose_mat.coeff(2,1);
-      r02 = pose_mat.coeff(0,2);
-      r12 = pose_mat.coeff(1,2);
-      r22 = pose_mat.coeff(2,2);
+      double r00 = pose_mat.coeff(0,0);
+      double r10 = pose_mat.coeff(1,0);
+      double r20 = pose_mat.coeff(2,0);
+      double r01 = pose_mat.coeff(0,1);
+      double r11 = pose_mat.coeff(1,1);
+      double r21 = pose_mat.coeff(2,1);
+      double r02 = pose_mat.coeff(0,2);
+      double r12 = pose_mat.coeff(1,2);
+      double r22 = pose_mat.coeff(2,2);
 
-      H* = Matrix(3,6) << 0, 0, 0, r00*h01, 0, 0, 
-                          0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0
+      *H = (gtsam::Matrix(3,6) << 0, 0, 0, r00*h01, r01*h11, r02*h21, 
+                          0, 0, 0, r10*h01, r11*h11, r12*h21,
+                          0, 0, 0, r20*h01, r21*h11, r22*h21).finished();
     }
 
     return hq - measured_;
@@ -193,16 +192,16 @@ vector<Vector3> calibrate() {
   NonlinearFactorGraph *graph = new NonlinearFactorGraph();
 
 
-  values.insert((Key)0, Vector3(-2,-1,2));
-  graph -> add(PriorFactor<Vector3>((Key)0, Vector3(-2,-1,2), anchor_noise_model));
-  values.insert((Key)1, Vector3(-1,1.5,3));
-  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(-1,1.5,3), anchor_noise_model));
-  values.insert((Key)2, Vector3(-2,0,1));
-  graph -> add(PriorFactor<Vector3>((Key)2, Vector3(-2,0,1), anchor_noise_model));
-  values.insert((Key)3, Vector3(1,-0.5,0));
-  graph -> add(PriorFactor<Vector3>((Key)3, Vector3(1,-0.5,0), anchor_noise_model));
-  values.insert((Key)4, Vector3(0,-2,0));
-  graph -> add(PriorFactor<Vector3>((Key)4, Vector3(1,-2,0), anchor_noise_model));
+  values.insert((Key)0, Vector3(0,1.3,0.8));
+  graph -> add(PriorFactor<Vector3>((Key)0, Vector3(0,1.3,0.8), anchor_noise_model));
+  values.insert((Key)1, Vector3(1.25,2,1.5));
+  graph -> add(PriorFactor<Vector3>((Key)1, Vector3(1.25,2,1.5), anchor_noise_model));
+  values.insert((Key)2, Vector3(2.5,1.3,2.5));
+  graph -> add(PriorFactor<Vector3>((Key)2, Vector3(2.5,1.3,2.5), anchor_noise_model));
+  values.insert((Key)3, Vector3(1.5,-0.5,0));
+  graph -> add(PriorFactor<Vector3>((Key)3, Vector3(1.5,-0.5,0), anchor_noise_model));
+  // values.insert((Key)4, Vector3(0,-2,0));
+  // graph -> add(PriorFactor<Vector3>((Key)4, Vector3(1,-2,0), anchor_noise_model));
 
   // Fixed point calibration
   for (int i=0; i<8; i++) {
@@ -270,24 +269,29 @@ vector<Vector3> calibrate() {
 
 int main() {  
   debugLog.open("log", ofstream::out | ofstream::trunc);
-  debugLog << "running program\n";
+  debugLog << "running program" << endl;
+
 
   // Load data
   json data = getJson();
   const int anchors = data["meas"]["d"].size();
 
+  sendA2a();
+  cout << getJson() << endl;
+
   Rot3 initMag = vectorsToRot(Unit3(0,1,0), (Unit3)dataToVecMap(data)["mag"]);
 
   int index = 0;
 
+  debugLog << "locating " << anchors << " anchors" << endl;
   // auto anchorPos = calibrate();
-  // Pre-calibrated values
+  // // Pre-calibrated values
   vector<Vector3> anchorPos(anchors);
-  anchorPos.at(0) = {-2.13621, -0.479968, 1.53154};
-  anchorPos.at(1) = {-0.924094, 1.3792, 2.70215};
-  anchorPos.at(2) = {-1.76413, -0.168566, 1.27901};
-  anchorPos.at(3) = {1.66293, -1.52572, 1.23659};
-  anchorPos.at(4) = {0.266235, -1.17323, -0.774018};
+  anchorPos.at(0) = {-0.313173, -0.148878, 1.9611};
+  anchorPos.at(1) = {-1.07305, 0.973571, 2.21429};
+  anchorPos.at(2) = {-2.53415, 0.57387, 0.459788};
+  anchorPos.at(3) = {0.605421, -0.342556, -0.358743};
+  // anchorPos.at(4) = {0.266235, -1.17323, -0.774018};
 
   debugLog << "creating structures" << endl;
 
