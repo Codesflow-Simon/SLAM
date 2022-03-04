@@ -1,7 +1,8 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
-#include <list>
-#include "lib/sensor.hpp"
+#include "src/lib/sensor.h"
+
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
 
 
 using namespace std;

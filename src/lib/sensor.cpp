@@ -9,7 +9,7 @@
 using json = nlohmann::json;
 using namespace std;
 
-list<json> getJsonList(unsigned int num=1) {
+list<json> getJsonList(unsigned int num) {
   list<json> output;
 
   int USB = open("/dev/ttyS4", O_RDWR| O_NOCTTY);
@@ -80,7 +80,7 @@ list<json> getJsonList(unsigned int num=1) {
 }
 
 json getJson() {
-  return getJsonList().front();
+  return getJsonList(1).front();
 }
 
 void sendA2a() {

@@ -33,8 +33,20 @@ include_directories(${GTSAM_INCLUDE_DIR})
 ###################################################################################
 # Build static library from common sources
 set(CONVENIENCE_LIB_NAME ${PROJECT_NAME})
-add_library(${CONVENIENCE_LIB_NAME} STATIC lib/sensor.hpp lib/sensor.cpp)
-target_link_libraries(${CONVENIENCE_LIB_NAME} gtsam)
+file (GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS "src/lib/*.cpp")
+file (GLOB_RECURSE LIB_HEADERS CONFIGURE_DEPENDS "src/lib/*.h")
+
+set (LIB_INCLUDE_DIRS "")
+foreach (_headerFile ${Foo_HEADERS})
+    get_filename_component(_dir ${_headerFile} PATH)
+    list (APPEND Foo_INCLUDE_DIRS ${_dir})
+endforeach()
+
+list (REMOVE_DUPLICATES LIB_INCLUDE_DIRS)
+
+add_executable(MAIN src/main.cpp)
+target_include_directories(MAIN PRIVATE ${Foo_INCLUDE_DIRS})
+
 
 ###################################################################################
 # Build tests (CMake tracks the dependecy to link with GTSAM through our project's static library)
@@ -42,7 +54,7 @@ target_link_libraries(${CONVENIENCE_LIB_NAME} gtsam)
 
 ###################################################################################
 # Build scripts (CMake tracks the dependecy to link with GTSAM through our project's static library)
-gtsamAddExamplesGlob("*.cpp" "" "${CONVENIENCE_LIB_NAME}")
+# gtsamAddExamplesGlob("src/*.cpp" "" "${CONVENIENCE_LIB_NAME}")
 
 ###################################################################################
 # Build MATLAB wrapper (CMake tracks the dependecy to link with GTSAM through our project's static library)
